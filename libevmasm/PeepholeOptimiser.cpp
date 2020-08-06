@@ -81,7 +81,6 @@ struct ApplyRule<Method, 1>
 };
 /*
 ==========
-*/
 template <class Method>
 struct ApplyRule_
 {
@@ -90,6 +89,7 @@ struct ApplyRule_
 		return Method::applySimple_(_in, _out, _size);
 	}
 };
+*/
 
 template <class Method, size_t WindowSize>
 struct SimplePeepholeOptimizerMethod
@@ -111,7 +111,7 @@ struct SimplePeepholeOptimizerMethod
 
 /*
 =======================
-*/
+
 template <class Method>
 struct SimplePeepholeOptimizerMethod_
 {
@@ -132,6 +132,7 @@ struct SimplePeepholeOptimizerMethod_
 			return false;
 	}
 };
+*/
 
 struct Identity: SimplePeepholeOptimizerMethod<Identity, 1>
 {
@@ -162,12 +163,12 @@ struct PatternTwo: SimplePeepholeOptimizerMethod<PatternTwo, 3>
 		if (SemanticInformation::isSwapInstruction(_swap) && 
 			SemanticInformation::isDupInstruction(_dup) && 
 			getSwapNumber(_swap.instruction()) == (getDupNumber(_dup.instruction()) - 1)
-			&& _swap1.instruction() == Instruction::SWAP1
+			&& _swap1 == Instruction::SWAP1
 		)
 		{
-			*_out = {Instruction::SWAP1, _swap.location()};
-			*_out = {Instruction::DUP2, _dup.location()};	//location is correct?
-			*_out = _swap1;
+			size_t n = getSwapNumber(_swap.instruction());
+			*_out = {Instruction::DUP1, _swap.location()};
+			*_out = {Instruction(0x90 + n), _dup.location()};	
 			return true;
 		}
 		return false;
@@ -201,7 +202,7 @@ struct PatternTwentyThree: SimplePeepholeOptimizerMethod<PatternTwentyThree, 2>
 		ins[Instruction::CALLDATACOPY] = true;
 		if(!ins[_op.instruction()] && _stop == Instruction::STOP)
 		{
-			*_out = {Instruction::POP, _op.location()};
+			*_out = {Instruction::STOP, _op.location()};
 			return true;
 		}
 		return false;
@@ -222,64 +223,102 @@ struct PatternTwentySix: SimplePeepholeOptimizerMethod<PatternTwentySix, 4>
 			size_t n = getSwapNumber(_swapn.instruction());
 			*_out = _dup1;
 			*_out = {Instruction::DUP2, _swapn.location()};
-			*_out = {Instruction(0x90+n), _dup2.location()};
+			*_out = {Instruction(0x90 + n), _dup2.location()};
 			return true;		
 		}
 		return false;
 	}
 };
 
-/*
-======================
-*/
-struct PatternSeven: SimplePeepholeOptimizerMethod_<PatternSeven>
+struct PatternSeven
 {
-	PatternSeven(size_t _WindowSize):SimplePeepholeOptimizerMethod_<PatternSeven>(_WindowSize) { WindowSize = _WindowSize; }
-	static bool applySimple_(AssemblyItems::const_iterator _in, std::back_insert_iterator<AssemblyItems> _out)
+	static bool apply(OptimiserState& _state)
 	{
-		int x, y;
-		if (SemanticInformation::isSwapInstruction(_in[0]))
-			x = getSwapNumber(_in[0].instruction());
+		auto it = _state.items.begin() + _state.i;	//i=0
+		auto end = _state.items.end();
+		if (it == end || !SemanticInformation::isSwapInstruction(it[0]))
+			return false;
+		size_t x_swap =  getSwapNumber(it[0].instruction());
+		if (it + 1 == end || !SemanticInformation::isSwapInstruction(it[1]))
+			return false;
+		size_t y_swap = getSwapNumber(it[1].instruction());
+		cout << "swapx: " << it[0].instruction() << "; swapy: " << it[1].instruction() << endl;
+		size_t n_pop = 0;
+		if (it + 2 != end)
+		{
+			size_t i = 2;
+			while ( n_pop < y_swap)
+			{
+				if (it[i] != Instruction::POP)
+					return false;
+				n_pop++; i++;
+				cout << n_pop << endl;
+			}
+		}	
+		cout << "number of pop: " << n_pop << endl;
+		if (n_pop == y_swap && x_swap < n_pop)
+		{
+			for (size_t i = 0; i < x_swap; i++)
+				*_state.out = Instruction::POP;
+			*_state.out = Instruction(0x90 + n_pop - x_swap - 1);
+			for (size_t i = 0; i < n_pop - x_swap; i++)
+				*_state.out = Instruction::POP;
+			cout << "n_pop - x_swap" << n_pop - x_swap << endl;
+			_state.i += n_pop + 1;
+			return true;
+		}		
 		else
 			return false;
-		if (SemanticInformation::isSwapInstruction(_in[1]))
-			y = getSwapNumber(_in[1].instruction());
-		else
+	}
+};
+/*
+struct PatternThirteen
+{
+	static bool apply(OptimiserState& _state)
+	{
+		auto it = _state.items.begin() + _state.i;
+		auto end = _state.items.end();
+		if (it == end || !isPushInstruction(it[0].instruction()))  //it[0] is not push
 			return false;
-
-		if (x >= y)
+		Instruction _pushx = it[0].instruction();
+		size_t n_pushx = 0, m_swapy = 0, y = 0;
+		size_t i = 1;
+		while (it + i != end && it[i] == _pushx)
+			i++;
+		n_pushx = i;
+		if (
+			it + n_pushx == end || 
+			!SemanticInformation::isSwapInstruction(it[n_pushx]) || 
+			getSwapNumber(it[n_pushx].instruction()) >= n_pushx
+		)
 			return false;
-		
-		for (int i = 0; i < y; i++)
-			if (_in[i+2].instruction() != Instruction::POP)
-				return false;
-		for (int i = 0; i < x; i++)
-			*_out = {Instruction::POP, _in[i].location()};
-		*_out = {0x90 + (y-x-1), _in[x].location()};
-		for (int i = 0; i < y-x; i++)
-			*_out = {Instruction::POP, _in[x+i+1].location()};
+		Instruction _swapy = it[n_pushx].instruction();
+		y = getSwapNumber(_swapy);
+		while (it + i != end && it[i] == _swapy)
+		{
+			m_swapy++; i++;
+		}
+		bool flag = y % 2; //the number of swapy is odd
+		for (i = 0; i < n_pushx; i++)
+		{
+			if (flag)
+			{
+				if (i == n_pushx -1)
+					*_state.out = it[n_pushx - 1 - y];
+				else if (i == n_pushx - 1 - y)
+					*_state.out = it[n_pushx - 1];
+				else
+					*_state.out = it[i];
+			}
+			else
+				*_state.out = it[i];
+			
+		}
+		_state.i += n_pushx;
 		return true;
 	}
 };
-
-struct Test: SimplePeepholeOptimizerMethod<Test, 1>
-{
-	static bool applySimple(
-		AssemblyItem const& _op,
-		std::back_insert_iterator<AssemblyItems> _out
-	)
-	{
-		if (_op.type() == Operation)
-		{
-			*_out = {Instruction::JUMPDEST, _op.location()};
-			cout << _op.instruction() << _op.location() << endl;
-			return true;
-		}
-		return false;
-	}
-};
-
-
+*/
 struct OpPop: SimplePeepholeOptimizerMethod<OpPop, 2>
 {
 	static bool applySimple(
@@ -476,8 +515,8 @@ bool PeepholeOptimiser::optimise()
 {
 	OptimiserState state {m_items, 0, std::back_inserter(m_optimisedItems)};
 	while (state.i < m_items.size())
-		applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), PatternTwo(), PatternTwentyThree(), PatternTwentySix(), Identity());
-		// applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), Identity(), PatternTwo(), PatternSeven(3));
+		applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), PatternTwo(), PatternSeven(), PatternTwentyThree(), PatternTwentySix(), Identity());
+		// applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), Identity(), PatternTwo(), PatternSeven());
 	if (m_optimisedItems.size() < m_items.size() || (
 		m_optimisedItems.size() == m_items.size() && (
 			eth::bytesRequired(m_optimisedItems, 3) < eth::bytesRequired(m_items, 3) ||
