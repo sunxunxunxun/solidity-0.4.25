@@ -271,54 +271,108 @@ struct PatternSeven
 			return false;
 	}
 };
-/*
+
+// struct PatternThirteen
+// {
+// 	static bool apply(OptimiserState& _state)
+// 	{
+// 		auto it = _state.items.begin() + _state.i;
+// 		auto end = _state.items.end();
+// 		if (it == end || !isPushInstruction(it[0].instruction()))  //it[0] is not push
+// 			return false;
+// 		Instruction _pushx = it[0].instruction();
+// 		size_t n_pushx = 0, m_swapy = 0, y = 0;
+// 		size_t i = 1;
+// 		while (it + i != end && it[i] == _pushx)
+// 			i++;
+// 		n_pushx = i;
+// 		if (
+// 			it + n_pushx == end || 
+// 			!SemanticInformation::isSwapInstruction(it[n_pushx]) || 
+// 			getSwapNumber(it[n_pushx].instruction()) >= n_pushx
+// 		)
+// 			return false;
+// 		Instruction _swapy = it[n_pushx].instruction();
+// 		y = getSwapNumber(_swapy);
+// 		while (it + i != end && it[i] == _swapy)
+// 		{
+// 			m_swapy++; i++;
+// 		}
+// 		bool flag = y % 2; //the number of swapy is odd
+// 		for (i = 0; i < n_pushx; i++)
+// 		{
+// 			if (flag)
+// 			{
+// 				if (i == n_pushx -1)
+// 					*_state.out = it[n_pushx - 1 - y];
+// 				else if (i == n_pushx - 1 - y)
+// 					*_state.out = it[n_pushx - 1];
+// 				else
+// 					*_state.out = it[i];
+// 			}
+// 			else
+// 				*_state.out = it[i];
+			
+// 		}
+// 		_state.i += n_pushx;
+// 		return true;
+// 	}
+// };
+
+// while op is Push:
+// 	pushData.append(op.data)
+// 	op++
+// if op is not Swap:
+// 	return false
+// while op is Swap:
+// 	swapData(pushData)
+// return true
+
 struct PatternThirteen
 {
 	static bool apply(OptimiserState& _state)
 	{
 		auto it = _state.items.begin() + _state.i;
 		auto end = _state.items.end();
-		if (it == end || !isPushInstruction(it[0].instruction()))  //it[0] is not push
-			return false;
-		Instruction _pushx = it[0].instruction();
-		size_t n_pushx = 0, m_swapy = 0, y = 0;
-		size_t i = 1;
-		while (it + i != end && it[i] == _pushx)
-			i++;
-		n_pushx = i;
-		if (
-			it + n_pushx == end || 
-			!SemanticInformation::isSwapInstruction(it[n_pushx]) || 
-			getSwapNumber(it[n_pushx].instruction()) >= n_pushx
-		)
-			return false;
-		Instruction _swapy = it[n_pushx].instruction();
-		y = getSwapNumber(_swapy);
-		while (it + i != end && it[i] == _swapy)
+		vector<AssemblyItems::const_iterator> vPushOp, vSwapOp;
+		int index = 0, swapNum = 0;
+		bool bOpt = false;
+
+		while ((it + index != end) && it[index].type() == Push)
 		{
-			m_swapy++; i++;
+			vPushOp.push_back(it+index);
+			index++;
 		}
-		bool flag = y % 2; //the number of swapy is odd
-		for (i = 0; i < n_pushx; i++)
+		while ((it + index != end) && SemanticInformation::isSwapInstruction(it[index]))
 		{
-			if (flag)
+			vSwapOp.push_back(it+index);
+			index++;
+		}
+		for (auto& swapOp : vSwapOp)
+		{
+			unsigned int y = getSwapNumber(swapOp[0].instruction());
+			if (y < vPushOp.size())
 			{
-				if (i == n_pushx -1)
-					*_state.out = it[n_pushx - 1 - y];
-				else if (i == n_pushx - 1 - y)
-					*_state.out = it[n_pushx - 1];
-				else
-					*_state.out = it[i];
+				swap(vPushOp[0], vPushOp[y]);
+				bOpt = true;
+				swapNum++;
 			}
-			else
-				*_state.out = it[i];
-			
+			else break;
 		}
-		_state.i += n_pushx;
-		return true;
+		if (bOpt)
+		{
+			for (auto& pushOp : vPushOp)
+			{
+				*_state.out = pushOp[0];
+			}
+			_state.i += vPushOp.size();
+			_state.i += swapNum;
+		}
+		return bOpt;
 	}
 };
-*/
+
+
 struct OpPop: SimplePeepholeOptimizerMethod<OpPop, 2>
 {
 	static bool applySimple(
@@ -515,7 +569,7 @@ bool PeepholeOptimiser::optimise()
 {
 	OptimiserState state {m_items, 0, std::back_inserter(m_optimisedItems)};
 	while (state.i < m_items.size())
-		applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), PatternTwo(), PatternSeven(), PatternTwentyThree(), PatternTwentySix(), Identity());
+		applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), PatternTwo(), PatternSeven(), PatternThirteen(), PatternTwentyThree(), PatternTwentySix(), Identity());
 		// applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), Identity(), PatternTwo(), PatternSeven());
 	if (m_optimisedItems.size() < m_items.size() || (
 		m_optimisedItems.size() == m_items.size() && (
