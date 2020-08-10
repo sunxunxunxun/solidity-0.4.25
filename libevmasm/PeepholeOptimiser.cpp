@@ -79,17 +79,6 @@ struct ApplyRule<Method, 1>
 		return Method::applySimple(_in[0], _out);
 	}
 };
-/*
-==========
-template <class Method>
-struct ApplyRule_
-{
-	static bool applyRule_(AssemblyItems::const_iterator _in, std::back_insert_iterator<AssemblyItems> _out, size_t _size)
-	{
-		return Method::applySimple_(_in, _out, _size);
-	}
-};
-*/
 
 template <class Method, size_t WindowSize>
 struct SimplePeepholeOptimizerMethod
@@ -108,31 +97,6 @@ struct SimplePeepholeOptimizerMethod
 			return false;
 	}
 };
-
-/*
-=======================
-
-template <class Method>
-struct SimplePeepholeOptimizerMethod_
-{
-	size_t WindowSize;
-
-	SimplePeepholeOptimizerMethod_(size_t _WindowSize) { WindowSize = _WindowSize; }
-	bool apply(OptimiserState& _state)
-	{
-		if (
-			_state.i + WindowSize <= _state.items.size() &&
-			ApplyRule_<Method>::applyRule_(_state.items.begin() + _state.i, _state.out)
-		)
-		{
-			_state.i += WindowSize;
-			return true;
-		}
-		else
-			return false;
-	}
-};
-*/
 
 struct Identity: SimplePeepholeOptimizerMethod<Identity, 1>
 {
@@ -264,60 +228,13 @@ struct PatternSeven
 			for (size_t i = 0; i < n_pop - x_swap; i++)
 				*_state.out = Instruction::POP;
 			cout << "n_pop - x_swap" << n_pop - x_swap << endl;
-			_state.i += n_pop + 1;
+			_state.i += n_pop + 2;
 			return true;
 		}		
 		else
 			return false;
 	}
 };
-
-// struct PatternThirteen
-// {
-// 	static bool apply(OptimiserState& _state)
-// 	{
-// 		auto it = _state.items.begin() + _state.i;
-// 		auto end = _state.items.end();
-// 		if (it == end || !isPushInstruction(it[0].instruction()))  //it[0] is not push
-// 			return false;
-// 		Instruction _pushx = it[0].instruction();
-// 		size_t n_pushx = 0, m_swapy = 0, y = 0;
-// 		size_t i = 1;
-// 		while (it + i != end && it[i] == _pushx)
-// 			i++;
-// 		n_pushx = i;
-// 		if (
-// 			it + n_pushx == end || 
-// 			!SemanticInformation::isSwapInstruction(it[n_pushx]) || 
-// 			getSwapNumber(it[n_pushx].instruction()) >= n_pushx
-// 		)
-// 			return false;
-// 		Instruction _swapy = it[n_pushx].instruction();
-// 		y = getSwapNumber(_swapy);
-// 		while (it + i != end && it[i] == _swapy)
-// 		{
-// 			m_swapy++; i++;
-// 		}
-// 		bool flag = y % 2; //the number of swapy is odd
-// 		for (i = 0; i < n_pushx; i++)
-// 		{
-// 			if (flag)
-// 			{
-// 				if (i == n_pushx -1)
-// 					*_state.out = it[n_pushx - 1 - y];
-// 				else if (i == n_pushx - 1 - y)
-// 					*_state.out = it[n_pushx - 1];
-// 				else
-// 					*_state.out = it[i];
-// 			}
-// 			else
-// 				*_state.out = it[i];
-			
-// 		}
-// 		_state.i += n_pushx;
-// 		return true;
-// 	}
-// };
 
 // while op is Push:
 // 	pushData.append(op.data)
@@ -570,7 +487,6 @@ bool PeepholeOptimiser::optimise()
 	OptimiserState state {m_items, 0, std::back_inserter(m_optimisedItems)};
 	while (state.i < m_items.size())
 		applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), PatternTwo(), PatternSeven(), PatternThirteen(), PatternTwentyThree(), PatternTwentySix(), Identity());
-		// applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), Identity(), PatternTwo(), PatternSeven());
 	if (m_optimisedItems.size() < m_items.size() || (
 		m_optimisedItems.size() == m_items.size() && (
 			eth::bytesRequired(m_optimisedItems, 3) < eth::bytesRequired(m_items, 3) ||
