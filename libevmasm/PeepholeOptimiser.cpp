@@ -301,9 +301,8 @@ struct UnreachableCode
 	}
 };
 
-// modified by sun
-//P2 — {swap(X), dup(X+1), swap1} → {dup1, swap(X+1)}, 1 ≤ X ≤ 15
-struct PatternTwo: SimplePeepholeOptimizerMethod<PatternTwo, 3>
+//P1 — {swap(X), dup(X+1), swap1} → {dup1, swap(X+1)}, 1 ≤ X ≤ 15 	(previous P2) 
+struct PatternOne: SimplePeepholeOptimizerMethod<PatternOne, 3>
 {
 	static bool applySimple(AssemblyItem const& _swap, AssemblyItem const& _dup, AssemblyItem const& _swap1, std::back_insert_iterator<AssemblyItems> _out)
 	{
@@ -316,244 +315,50 @@ struct PatternTwo: SimplePeepholeOptimizerMethod<PatternTwo, 3>
 			size_t n = getSwapNumber(_swap.instruction());
 			*_out = {Instruction::DUP1, _swap.location()};
 			*_out = {Instruction(0x90 + n), _dup.location()};	
+			cout << "pattern 1" << endl;
+			return true;
+		}
+		return false;
+	}
+};
+
+//P2 — {push(X), swap(Y), Y consecutive pops} → {Y consecutive pops, push(X)}, 1 ≤ X ≤ 32, 1 ≤ Y ≤ 16
+struct PatternTwo
+{
+	static bool apply(OptimiserState& _state)
+	{
+		auto it = _state.items.begin() + _state.i;
+		auto end = _state.items.end();
+		if (it == end || it[0].type() != Push)
+			return false;
+		if (it + 1 == end || !SemanticInformation::isSwapInstruction(it[1]))
+		    return false;
+		size_t n = getSwapNumber(it[1].instruction());
+		size_t count = 0;
+
+		for (size_t i = 2; count < n; i++)
+		{
+			if (it + i == end || it[i] != Instruction::POP)
+				return false;
+			count++;
+		}
+
+		if (count == n)
+		{
+			for (size_t i = 0; i < n; i++)
+				*_state.out = Instruction::POP;
+			*_state.out = it[0];
+			_state.i += count + 2;
 			cout << "pattern 2" << endl;
 			return true;
 		}
 		return false;
+		
 	}
 };
 
-//P7 — {swap(X), swap(Y), Y consecutive pops} →  {X consecutive pops, swap(Y-X), (Y-X) consecutive pops}, 1 ≤ X ≤ 15, X < Y
-struct PatternSeven
-{
-	static bool apply(OptimiserState& _state)
-	{
-		auto it = _state.items.begin() + _state.i;	
-		auto end = _state.items.end();
-		if (it == end || !SemanticInformation::isSwapInstruction(it[0]))
-			return false;
-		size_t x_swap =  getSwapNumber(it[0].instruction());
-		if (it + 1 == end || !SemanticInformation::isSwapInstruction(it[1]))
-			return false;
-		size_t y_swap = getSwapNumber(it[1].instruction());
-		size_t n_pop = 0;
-		if (it + 2 != end)
-		{
-			size_t i = 2;
-			while (n_pop < y_swap)
-			{
-				if (it[i] != Instruction::POP)
-					return false;
-				n_pop++; i++;
-			}
-		}	
-		if (n_pop == y_swap && x_swap < n_pop)
-		{
-			for (size_t i = 0; i < x_swap; i++)
-				*_state.out = Instruction::POP;
-			*_state.out = Instruction(0x90 + n_pop - x_swap - 1);
-			for (size_t i = 0; i < n_pop - x_swap; i++)
-				*_state.out = Instruction::POP;
-			_state.i += n_pop + 2;
-			cout << "pattern 7" << endl;
-			return true;
-		}		
-		else
-			return false;
-	}
-};
-
-//P13 — {N consecutive push(X)，M consecutive swap(Y)} → {N consecutive push(X)}, Y < N, 1 ≤ X ≤ 32, 1 ≤ Y ≤ 16
-struct PatternThirteen
-{
-	static bool apply(OptimiserState& _state)
-	{
-		auto it = _state.items.begin() + _state.i;
-		auto end = _state.items.end();
-		vector<AssemblyItems::const_iterator> vPushOp, vSwapOp;
-		size_t index = 0, swapNum = 0;
-		bool bOpt = false;
-
-		while ((it + index != end) && it[index].type() == Push)
-		{
-			vPushOp.push_back(it+index);
-			index++;
-		}
-		while ((it + index != end) && SemanticInformation::isSwapInstruction(it[index]))
-		{
-			vSwapOp.push_back(it+index);
-			index++;
-		}
-		for (auto& swapOp : vSwapOp)
-		{
-			size_t y = getSwapNumber(swapOp[0].instruction());
-			size_t sz = vPushOp.size();
-			if (y < vPushOp.size())
-			{
-				swap(vPushOp.back(), vPushOp[sz-y-1]);
-				bOpt = true;
-				swapNum++;
-			}
-			else break;
-		}
-		if (bOpt)
-		{
-			for (auto& pushOp : vPushOp)
-			{
-				*_state.out = pushOp[0];
-			}
-			_state.i += vPushOp.size();
-			_state.i += swapNum;
-			cout << "pattern 13" << endl;
-		}
-		return bOpt;
-	}
-};
-
-//P23 — {OP, stop} → {stop},OP can be any operation except JUMPDEST/JUMP/JUMPI/MSTORE/MSTORE8/SSTORE/CREATE/CALL/CALLCODE/DELEGETECALL/SELFDESTRUCT/LOGx/EXTCODECOPY/CODECOPY/CALLDATACOPY/
-struct PatternTwentyThree: SimplePeepholeOptimizerMethod<PatternTwentyThree, 2>
-{
-	static bool applySimple(AssemblyItem const& _op, AssemblyItem const& _stop, std::back_insert_iterator<AssemblyItems> _out)
-	{
-		if (_op.type() != Operation)
-			return false;
-		unordered_map<Instruction, bool> ins;
-		ins[Instruction::JUMPDEST] = true;
-		ins[Instruction::JUMP] = true;
-		ins[Instruction::JUMPI] = true;
-		ins[Instruction::MSTORE] = true;
-		ins[Instruction::MSTORE8] = true;
-		ins[Instruction::SSTORE] = true;
-		ins[Instruction::CREATE] = true;
-		ins[Instruction::CALL] = true;
-		ins[Instruction::CALLCODE] = true;
-		ins[Instruction::DELEGATECALL] = true;
-		ins[Instruction::SELFDESTRUCT] = true;
-		ins[Instruction::LOG1] = true;
-		ins[Instruction::LOG2] = true;
-		ins[Instruction::LOG3] = true;
-		ins[Instruction::LOG4] = true;
-		ins[Instruction::EXTCODECOPY] = true;
-		ins[Instruction::CODECOPY] = true;
-		ins[Instruction::CALLDATACOPY] = true;
-		if(!ins[_op.instruction()] && _stop == Instruction::STOP)
-		{
-			*_out = {Instruction::STOP, _op.location()};
-			cout << "pattern 23" << endl;
-			return true;
-		}
-		return false;
-	}
-};
-
-//P26 — {dup1, swap(X), dup2, swap1} → {dup1, dup2, swap(X+1)}, 1 ≤ X ≤ 15
-struct PatternTwentySix: SimplePeepholeOptimizerMethod<PatternTwentySix, 4>
-{
-	static bool applySimple(AssemblyItem const& _dup1, AssemblyItem const& _swapn, AssemblyItem const& _dup2, AssemblyItem const& _swap1, std::back_insert_iterator<AssemblyItems> _out)
-	{
-		if (
-			_dup1 == Instruction::DUP1 &&
-			SemanticInformation::isSwapInstruction(_swapn) && (getSwapNumber(_swapn.instruction()) < 16) &&
-			_dup2 == Instruction::DUP2 &&
-			_swap1 == Instruction::SWAP1
-		)
-		{
-			size_t n = getSwapNumber(_swapn.instruction());
-			*_out = _dup1;
-			*_out = {Instruction::DUP2, _swapn.location()};
-			*_out = {Instruction(0x90 + n), _dup2.location()};
-			cout << "pattern 26" << endl;
-			return true;		
-		}
-		return false;
-	}
-};
-//end, by sun
-
-
-// modify by wh 
-//dupN/swapN-1/swap1/dupN/swap1(N>2)=======>dupN/dup1/swapN/swap2
-struct PatternTwentyEight
-{
-	static bool apply(OptimiserState& _state)
-	{
-		size_t WindowSize = 0;
-		auto it = _state.items.begin() + _state.i;
-		auto end = _state.items.end();
-		if (it == end)
-			return false;
-		if( it[0].type() == Operation  &&  isDupInstruction(it[0].instruction()) == true )
-		{
-			size_t DupNumber = getDupNumber(it[0].instruction());
-			if( DupNumber > 2 )
-			{
-				WindowSize = 5;
-				if(
-					_state.i + WindowSize <= _state.items.size()  &&
-					applyrule(_state.items.begin()+_state.i,_state.out,DupNumber)
-				)
-				{
-					_state.i += WindowSize;
-					return true;
-				}
-				else
-					return false;
-			}
-			else
-			return false;
-		}
-		else
-		{
-			return false;
-		}       
-	}
-	static bool applyrule(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t DupNumber)
-	{
-		return applySimple(_in,_out,DupNumber);
-	}
-	                        
-	static bool applySimple(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t DupNumber)
-	{
-		if
-		(
-			_in[1].type() != Operation ||
-			isSwapInstruction(_in[1].instruction() ) == false ||
-			getSwapNumber(_in[1].instruction()) != DupNumber - 1  		
-		)
-		return false;
-		else
-		{
-			if(_in[2] != Instruction::SWAP1) return false;
-			else
-			{
-				if
-				(
-					_in[3].type() != Operation ||
-					isDupInstruction(_in[3].instruction() ) == false ||
-					getDupNumber(_in[3].instruction() ) != DupNumber  
-				)
-				return false;
-				else
-				{
-					if(_in[4] != Instruction::SWAP1) return false;
-					else
-					{
-						*_out = _in[0];
-						*_out = AssemblyItem(Instruction::DUP1,_in[1].location());
-						*_out = AssemblyItem(swapInstruction(DupNumber),_in[2].location());
-						*_out = AssemblyItem(Instruction::SWAP2,_in[3].location());
-						cout << "pattern 28" << endl;
-						return true;
-					}
-				}
-		return false;
-			}
-		}
-	}
-};
-
-//swapN,N+1pop====>N+1pop
-struct PatternSix
+//P3 — {swap(X), X+1 consecutive pops} —> {X+1 consecutive pops}, 1≤X≤16	(previous P6)
+struct PatternThree
 {
 	static bool apply(OptimiserState& _state)
 	{
@@ -601,101 +406,99 @@ struct PatternSix
 			{
 				*_out = {Instruction::POP,_in[i].location()};
 			}
+			cout << "pattern 3" << endl;
+			return true;
+		}
+		else
+			return false;
+	}
+};
+
+//P4 — {swap(X), swap(Y), Y consecutive pops} →  {X consecutive pops, swap(Y-X), (Y-X) consecutive pops}, 1 ≤ X ≤ 15, X < Y 	(previous P7)
+struct PatternFour
+{
+	static bool apply(OptimiserState& _state)
+	{
+		auto it = _state.items.begin() + _state.i;	
+		auto end = _state.items.end();
+		if (it == end || !SemanticInformation::isSwapInstruction(it[0]))
+			return false;
+		size_t x_swap =  getSwapNumber(it[0].instruction());
+		if (it + 1 == end || !SemanticInformation::isSwapInstruction(it[1]))
+			return false;
+		size_t y_swap = getSwapNumber(it[1].instruction());
+		size_t n_pop = 0;
+		if (it + 2 != end)
+		{
+			size_t i = 2;
+			while (n_pop < y_swap)
+			{
+				if (it[i] != Instruction::POP)
+					return false;
+				n_pop++; i++;
+			}
+		}	
+		if (n_pop == y_swap && x_swap < n_pop)
+		{
+			for (size_t i = 0; i < x_swap; i++)
+				*_state.out = Instruction::POP;
+			*_state.out = Instruction(0x90 + n_pop - x_swap - 1);
+			for (size_t i = 0; i < n_pop - x_swap; i++)
+				*_state.out = Instruction::POP;
+			_state.i += n_pop + 2;
+			cout << "pattern 4" << endl;
+			return true;
+		}		
+		else
+			return false;
+	}
+};
+
+
+//P5 — {push(X), swap(Y), push(M), swap1} → {push(M), push(X), swap(Y+1)}, 1 ≤ X ≤ 32, 1 ≤ Y ≤ 15, 1 ≤ M ≤ 32	(previous P8)
+struct PatternFive: SimplePeepholeOptimizerMethod<PatternFive, 4>
+{
+	static bool applySimple(AssemblyItem const& _push1, AssemblyItem const& _swap, AssemblyItem const& _push2, AssemblyItem const& _swap1, std::back_insert_iterator<AssemblyItems> _out)
+	{
+		auto t = _push1.type();
+		auto s = _push2.type();
+		if (t == Push && s==Push &&
+			SemanticInformation::isSwapInstruction(_swap) &&
+			_swap1 == Instruction::SWAP1
+		)
+		{
+			*_out = _push2;
+			*_out = _push1;
+			size_t n = getSwapNumber(_swap.instruction());
+			*_out = {Instruction(0x90 + n), _push2.location()};
+			cout << "pattern 5" << endl;
+			return true;
+		}
+		return false;
+	}
+};
+
+//P6 — {dup(X), swap(X)} → {dup(X)}, 1 ≤ X ≤ 16	 (previous P11)
+struct PatternSix: SimplePeepholeOptimizerMethod<PatternSix, 2>
+{
+	static bool applySimple(AssemblyItem const& _dup, AssemblyItem const& _swap, std::back_insert_iterator<AssemblyItems> _out)
+	{
+		if (
+			SemanticInformation::isDupInstruction(_dup) &&
+			SemanticInformation::isSwapInstruction(_swap) &&
+			getDupNumber(_dup.instruction()) ==  getSwapNumber(_swap.instruction())
+		)
+		{
+			*_out = _dup;
 			cout << "pattern 6" << endl;
 			return true;
 		}
-		else
-			return false;
+		return false;
 	}
 };
 
-struct PatternTwentyFive
-{
-	static bool apply(OptimiserState& _state)
-	{	
-		size_t WindowSize = 0;
-		auto it = _state.items.begin() + _state.i;
-		auto end = _state.items.end();
-		if (it == end)
-			return false;
-		if ( it[0].type()!= Operation || SemanticInformation::isSwapInstruction(it[0])==false )
-			return false;
-		else
-		{
-			size_t NumberOfSwap = getSwapNumber(it[0].instruction());
-			size_t SumOfPushAndDup = 0;
-			size_t ptr = 1;
-			while(it + ptr != end)
-			{
-				if(it[ptr].type() == Operation && isSwapInstruction(it[ptr].instruction()) )
-				{
-					ptr += 1;
-					SumOfPushAndDup +=1;
-				}
-				else if( it[ptr].type()==Push )
-				{
-					ptr += 1;
-					SumOfPushAndDup +=1;
-				}
-				else
-					break;
-			}
-			WindowSize = NumberOfSwap + SumOfPushAndDup + SumOfPushAndDup +1 ;
-			if(
-				_state.i + WindowSize <= _state.items.size()  &&
-				applyrule(_state.items.begin()+_state.i,_state.out,WindowSize,SumOfPushAndDup)
-				)
-				{
-					_state.i += WindowSize;
-					cout << "pattern 25" << endl;
-					return true;
-				}
-			else
-				return false;
-		}	
-	}
-	static bool applyrule(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t WindowSize,size_t SumOfPushAndDup)
-	{
-		
-		return applySimple(_in,_out,WindowSize,SumOfPushAndDup);
-	}
-	static bool applySimple(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t WindowSize,size_t SumOfPushAndDup)
-	{
-		bool satisfied = true;
-		if(	_in[SumOfPushAndDup + 1].type() != Operation )
-			return false;
-		else if
-		(
-			_in[SumOfPushAndDup + 1].instruction() != Instruction::ADD &&
-			_in[SumOfPushAndDup + 1].instruction() != Instruction::MUL &&
-			_in[SumOfPushAndDup + 1].instruction() != Instruction::AND &&
-			_in[SumOfPushAndDup + 1].instruction() != Instruction::XOR &&
-			_in[SumOfPushAndDup + 1].instruction() != Instruction::OR 
-		)
-			return false;
-		else
-		{
-			for(size_t i = SumOfPushAndDup + 1; i < WindowSize ; i++)
-			{
-				if(_in[i] != _in[SumOfPushAndDup + 1])
-					satisfied = false;
-			}
-		}
-		if(satisfied == true)
-		{
-			for(size_t i = 1;i< WindowSize;i++)
-			{
-				*_out = _in[i];
-			}
-			return true;
-		}
-		else
-			return false;
-	}
-};
-
-//   swap1,...,swapN,...swap1, (N-1)  pop====>(N-1) pop, swap1     
-struct PatternTwelve
+//P7 — {swap1, swap2,...,swapN,...swap1, (X-1) consecutive pops} —> {(X-1) consecutive pops, swap1}, 2≤X≤16  (previous P12)    
+struct PatternSeven
 {
 	static bool apply(OptimiserState& _state)
 	{
@@ -739,7 +542,7 @@ struct PatternTwelve
 				)
 				{
 					_state.i += WindowSize;
-					cout << "pattern 12" << endl;
+					cout << "pattern 7" << endl;
 					return true;
 				}
 			else
@@ -795,8 +598,55 @@ struct PatternTwelve
 	}
 };
 
-//     OP/ISZERO/ISZERO========>OP          OP: LT/GT/SLT/SGT/EQ
-struct PatternTwenty: SimplePeepholeOptimizerMethod<PatternTwenty, 3>
+//P8 — {N consecutive push(X)，M consecutive swap(Y)} → {N consecutive push(X)}, Y < N, 1 ≤ X ≤ 32, 1 ≤ Y ≤ 16	(previous P13)
+struct PatternEight
+{
+	static bool apply(OptimiserState& _state)
+	{
+		auto it = _state.items.begin() + _state.i;
+		auto end = _state.items.end();
+		vector<AssemblyItems::const_iterator> vPushOp, vSwapOp;
+		size_t index = 0, swapNum = 0;
+		bool bOpt = false;
+
+		while ((it + index != end) && it[index].type() == Push)
+		{
+			vPushOp.push_back(it+index);
+			index++;
+		}
+		while ((it + index != end) && SemanticInformation::isSwapInstruction(it[index]))
+		{
+			vSwapOp.push_back(it+index);
+			index++;
+		}
+		for (auto& swapOp : vSwapOp)
+		{
+			size_t y = getSwapNumber(swapOp[0].instruction());
+			size_t sz = vPushOp.size();
+			if (y < vPushOp.size())
+			{
+				swap(vPushOp.back(), vPushOp[sz-y-1]);
+				bOpt = true;
+				swapNum++;
+			}
+			else break;
+		}
+		if (bOpt)
+		{
+			for (auto& pushOp : vPushOp)
+			{
+				*_state.out = pushOp[0];
+			}
+			_state.i += vPushOp.size();
+			_state.i += swapNum;
+			cout << "pattern 8" << endl;
+		}
+		return bOpt;
+	}
+};
+
+//P9     OP/ISZERO/ISZERO========>OP          OP: LT/GT/SLT/SGT/EQ	(previous P20)
+struct PatternNine: SimplePeepholeOptimizerMethod<PatternNine, 3>
 {
 	static bool applySimple(AssemblyItem const& _op, AssemblyItem const& _zore_1, AssemblyItem const& _zore_2,std::back_insert_iterator<AssemblyItems> _out)
 	{	
@@ -807,95 +657,53 @@ struct PatternTwenty: SimplePeepholeOptimizerMethod<PatternTwenty, 3>
 		)
 		{
 			*_out = _op;\
-			cout << "pattern 20" << endl;
+			cout << "pattern 9" << endl;
 			return true;
 		}
 		else
 			return false;
 	}
 };
-//end, modify by wh 
 
-//modified by luo
-//P3 — {push(X), swap(Y), Y consecutive pops} → {Y consecutive pops, push(X)}, 1 ≤ X ≤ 32, 1 ≤ Y ≤ 16
-struct PatternThree
+//P10 — {OP, stop} → {stop},OP can be any operation except JUMPDEST/JUMP/JUMPI/MSTORE/MSTORE8/SSTORE/CREATE/CALL/CALLCODE/DELEGETECALL/SELFDESTRUCT/LOGx/EXTCODECOPY/CODECOPY/CALLDATACOPY/	(previous P23)
+struct PatternTen: SimplePeepholeOptimizerMethod<PatternTen, 2>
 {
-	static bool apply(OptimiserState& _state)
+	static bool applySimple(AssemblyItem const& _op, AssemblyItem const& _stop, std::back_insert_iterator<AssemblyItems> _out)
 	{
-		auto it = _state.items.begin() + _state.i;
-		auto end = _state.items.end();
-		if (it == end || it[0].type() != Push)
+		if (_op.type() != Operation)
 			return false;
-		if (it + 1 == end || !SemanticInformation::isSwapInstruction(it[1]))
-		    return false;
-		size_t n = getSwapNumber(it[1].instruction());
-		size_t count = 0;
-
-		for (size_t i = 2; count < n; i++)
+		unordered_map<Instruction, bool> ins;
+		ins[Instruction::JUMPDEST] = true;
+		ins[Instruction::JUMP] = true;
+		ins[Instruction::JUMPI] = true;
+		ins[Instruction::MSTORE] = true;
+		ins[Instruction::MSTORE8] = true;
+		ins[Instruction::SSTORE] = true;
+		ins[Instruction::CREATE] = true;
+		ins[Instruction::CALL] = true;
+		ins[Instruction::CALLCODE] = true;
+		ins[Instruction::DELEGATECALL] = true;
+		ins[Instruction::SELFDESTRUCT] = true;
+		ins[Instruction::LOG1] = true;
+		ins[Instruction::LOG2] = true;
+		ins[Instruction::LOG3] = true;
+		ins[Instruction::LOG4] = true;
+		ins[Instruction::EXTCODECOPY] = true;
+		ins[Instruction::CODECOPY] = true;
+		ins[Instruction::CALLDATACOPY] = true;
+		if(!ins[_op.instruction()] && _stop == Instruction::STOP)
 		{
-			if (it + i == end || it[i] != Instruction::POP)
-				return false;
-			count++;
-		}
-
-		if (count == n)
-		{
-			for (size_t i = 0; i < n; i++)
-				*_state.out = Instruction::POP;
-			*_state.out = it[0];
-			_state.i += count + 2;
-			cout << "pattern 3" << endl;
-			return true;
-		}
-		return false;
-		
-	}
-};
-
-//P8 — {push(X), swap(Y), push(M), swap1} → {push(M), push(X), swap(Y+1)}, 1 ≤ X ≤ 32, 1 ≤ Y ≤ 15, 1 ≤ M ≤ 32
-struct PatternEight: SimplePeepholeOptimizerMethod<PatternEight, 4>
-{
-	static bool applySimple(AssemblyItem const& _push1, AssemblyItem const& _swap, AssemblyItem const& _push2, AssemblyItem const& _swap1, std::back_insert_iterator<AssemblyItems> _out)
-	{
-		auto t = _push1.type();
-		auto s = _push2.type();
-		if (t == Push && s==Push &&
-			SemanticInformation::isSwapInstruction(_swap) &&
-			_swap1 == Instruction::SWAP1
-		)
-		{
-			*_out = _push2;
-			*_out = _push1;
-			size_t n = getSwapNumber(_swap.instruction());
-			*_out = {Instruction(0x90 + n), _push2.location()};
-			cout << "pattern 8" << endl;
+			*_out = {Instruction::STOP, _op.location()};
+			cout << "pattern 10" << endl;
 			return true;
 		}
 		return false;
 	}
 };
 
-//P11 — {dup(X), swap(X)} → {dup(X)}, 1 ≤ X ≤ 16
-struct PatternEleven: SimplePeepholeOptimizerMethod<PatternEleven, 2>
-{
-	static bool applySimple(AssemblyItem const& _dup, AssemblyItem const& _swap, std::back_insert_iterator<AssemblyItems> _out)
-	{
-		if (
-			SemanticInformation::isDupInstruction(_dup) &&
-			SemanticInformation::isSwapInstruction(_swap) &&
-			getDupNumber(_dup.instruction()) ==  getSwapNumber(_swap.instruction())
-		)
-		{
-			*_out = _dup;
-			cout << "pattern 11" << endl;
-			return true;
-		}
-		return false;
-	}
-};
 
-//P24 — {consecutive X push(N), dup(Y), swap(Z)} → {combination of X push(N) and dup(M)}, Y<=X, Z<=X, M<=X, 1 ≤ N ≤ 32, 1 ≤ Y ≤ 16, 1 ≤ Z ≤ 16, 1 ≤ M ≤ 16
-struct PatternTwentyFour
+//P11 — {X consecutive push(N), dup(Y), swap(Z)} → {combination of X push(N) and dup(M)}, Y<=X, Z<=X, M<=X, 1 ≤ N ≤ 32, 1 ≤ Y ≤ 16, 1 ≤ Z ≤ 16, 1 ≤ M ≤ 16	(previous P24)
+struct PatternEleven
 {
 	static bool apply(OptimiserState& _state)
 	{
@@ -968,13 +776,122 @@ struct PatternTwentyFour
 			}
 		}
 		_state.i += pushCount + 2;
-		cout << "pattern 24" << endl;
+		cout << "pattern 11" << endl;
 		return true;	
 	}
 };
 
-//P27 — {swap1, swap(X), OP, dup(X), OP} → {dup2, swap(X+1), OP, OP}, 2 ≤ X ≤ 15, OP ∈ {add, mul, and, or, xor}
-struct PatternTwentySeven: SimplePeepholeOptimizerMethod<PatternTwentySeven, 5>
+//P12 — {swap(X), Y consecutive OPs, (X+Y) consucutive OP'} —> {Y consecutive OPs, (X+Y) consecutive OP'}, OP ∈ {push(X), dup(Y)}, OP' ∈{add, mul, and, or, xor}, 1≤X≤32, 1≤N≤16, 1≤Y≤ 16	(previous P25)
+struct PatternTwelve
+{
+	static bool apply(OptimiserState& _state)
+	{	
+		size_t WindowSize = 0;
+		auto it = _state.items.begin() + _state.i;
+		auto end = _state.items.end();
+		if (it == end)
+			return false;
+		if ( it[0].type()!= Operation || SemanticInformation::isSwapInstruction(it[0])==false )
+			return false;
+		else
+		{
+			size_t NumberOfSwap = getSwapNumber(it[0].instruction());
+			size_t SumOfPushAndDup = 0;
+			size_t ptr = 1;
+			while(it + ptr != end)
+			{
+				if(it[ptr].type() == Operation && isSwapInstruction(it[ptr].instruction()) )
+				{
+					ptr += 1;
+					SumOfPushAndDup +=1;
+				}
+				else if( it[ptr].type()==Push )
+				{
+					ptr += 1;
+					SumOfPushAndDup +=1;
+				}
+				else
+					break;
+			}
+			WindowSize = NumberOfSwap + SumOfPushAndDup + SumOfPushAndDup +1 ;
+			if(
+				_state.i + WindowSize <= _state.items.size()  &&
+				applyrule(_state.items.begin()+_state.i,_state.out,WindowSize,SumOfPushAndDup)
+				)
+				{
+					_state.i += WindowSize;
+					cout << "pattern 12" << endl;
+					return true;
+				}
+			else
+				return false;
+		}	
+	}
+	static bool applyrule(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t WindowSize,size_t SumOfPushAndDup)
+	{
+		
+		return applySimple(_in,_out,WindowSize,SumOfPushAndDup);
+	}
+	static bool applySimple(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t WindowSize,size_t SumOfPushAndDup)
+	{
+		bool satisfied = true;
+		if(	_in[SumOfPushAndDup + 1].type() != Operation )
+			return false;
+		else if
+		(
+			_in[SumOfPushAndDup + 1].instruction() != Instruction::ADD &&
+			_in[SumOfPushAndDup + 1].instruction() != Instruction::MUL &&
+			_in[SumOfPushAndDup + 1].instruction() != Instruction::AND &&
+			_in[SumOfPushAndDup + 1].instruction() != Instruction::XOR &&
+			_in[SumOfPushAndDup + 1].instruction() != Instruction::OR 
+		)
+			return false;
+		else
+		{
+			for(size_t i = SumOfPushAndDup + 1; i < WindowSize ; i++)
+			{
+				if(_in[i] != _in[SumOfPushAndDup + 1])
+					satisfied = false;
+			}
+		}
+		if(satisfied == true)
+		{
+			for(size_t i = 1;i< WindowSize;i++)
+			{
+				*_out = _in[i];
+			}
+			return true;
+		}
+		else
+			return false;
+	}
+};
+
+//P13 — {dup1, swap(X), dup2, swap1} → {dup1, dup2, swap(X+1)}, 1 ≤ X ≤ 15	(previous P26)
+struct PatternThirteen: SimplePeepholeOptimizerMethod<PatternThirteen, 4>
+{
+	static bool applySimple(AssemblyItem const& _dup1, AssemblyItem const& _swapn, AssemblyItem const& _dup2, AssemblyItem const& _swap1, std::back_insert_iterator<AssemblyItems> _out)
+	{
+		if (
+			_dup1 == Instruction::DUP1 &&
+			SemanticInformation::isSwapInstruction(_swapn) && (getSwapNumber(_swapn.instruction()) < 16) &&
+			_dup2 == Instruction::DUP2 &&
+			_swap1 == Instruction::SWAP1
+		)
+		{
+			size_t n = getSwapNumber(_swapn.instruction());
+			*_out = _dup1;
+			*_out = {Instruction::DUP2, _swapn.location()};
+			*_out = {Instruction(0x90 + n), _dup2.location()};
+			cout << "pattern 13" << endl;
+			return true;		
+		}
+		return false;
+	}
+};
+
+//P14 — {swap1, swap(X), OP, dup(X), OP} → {dup2, swap(X+1), OP, OP}, 2 ≤ X ≤ 15, OP ∈ {add, mul, and, or, xor}	 (previous P27)
+struct PatternFourteen: SimplePeepholeOptimizerMethod<PatternFourteen, 5>
 {
 	static bool applySimple(AssemblyItem const& _swap1, AssemblyItem const& _swap, AssemblyItem const& _op1, AssemblyItem const& _dup, AssemblyItem const& _op2, std::back_insert_iterator<AssemblyItems> _out)
 	{
@@ -999,13 +916,92 @@ struct PatternTwentySeven: SimplePeepholeOptimizerMethod<PatternTwentySeven, 5>
 			*_out = {Instruction(0x90+n), _swap.location()};
 			*_out = _op1;
 			*_out = _op2;
-			cout << "pattern 27" << endl;
+			cout << "pattern 14" << endl;
 			return true;
 		}
 		return false;
 	}
 };
-//end, by luo
+
+//P15 — {dupX, swapX-1, swap1, dupX, swap1} —> {dupX, dup1, swapX, swap2}, 3≤X≤16	(previous P28)
+struct PatternFifteen
+{
+	static bool apply(OptimiserState& _state)
+	{
+		size_t WindowSize = 0;
+		auto it = _state.items.begin() + _state.i;
+		auto end = _state.items.end();
+		if (it == end)
+			return false;
+		if( it[0].type() == Operation  &&  isDupInstruction(it[0].instruction()) == true )
+		{
+			size_t DupNumber = getDupNumber(it[0].instruction());
+			if( DupNumber > 2 )
+			{
+				WindowSize = 5;
+				if(
+					_state.i + WindowSize <= _state.items.size()  &&
+					applyrule(_state.items.begin()+_state.i,_state.out,DupNumber)
+				)
+				{
+					_state.i += WindowSize;
+					return true;
+				}
+				else
+					return false;
+			}
+			else
+			return false;
+		}
+		else
+		{
+			return false;
+		}       
+	}
+	static bool applyrule(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t DupNumber)
+	{
+		return applySimple(_in,_out,DupNumber);
+	}
+	                        
+	static bool applySimple(AssemblyItems::const_iterator _in,back_insert_iterator<AssemblyItems> _out,size_t DupNumber)
+	{
+		if
+		(
+			_in[1].type() != Operation ||
+			isSwapInstruction(_in[1].instruction() ) == false ||
+			getSwapNumber(_in[1].instruction()) != DupNumber - 1  		
+		)
+		return false;
+		else
+		{
+			if(_in[2] != Instruction::SWAP1) return false;
+			else
+			{
+				if
+				(
+					_in[3].type() != Operation ||
+					isDupInstruction(_in[3].instruction() ) == false ||
+					getDupNumber(_in[3].instruction() ) != DupNumber  
+				)
+				return false;
+				else
+				{
+					if(_in[4] != Instruction::SWAP1) return false;
+					else
+					{
+						*_out = _in[0];
+						*_out = AssemblyItem(Instruction::DUP1,_in[1].location());
+						*_out = AssemblyItem(swapInstruction(DupNumber),_in[2].location());
+						*_out = AssemblyItem(Instruction::SWAP2,_in[3].location());
+						cout << "pattern 15" << endl;
+						return true;
+					}
+				}
+		return false;
+			}
+		}
+	}
+};
 
 void applyMethods(OptimiserState&)
 {
@@ -1031,9 +1027,10 @@ bool PeepholeOptimiser::optimise()
 	OptimiserState state {m_items, 0, std::back_inserter(m_optimisedItems)};
 	while (state.i < m_items.size())
 		applyMethods(state, PushPop(), OpPop(), DoublePush(), DoubleSwap(), CommutativeSwap(), SwapComparison(), JumpToNext(), UnreachableCode(), TagConjunctions(), 
-		PatternTwo(), PatternSeven(), PatternThirteen(), PatternTwentyThree(), PatternTwentySix(), //sun
-		PatternSix(), PatternTwelve(), PatternTwenty(), PatternTwentyFive(), PatternTwentyEight(), //wu
-		PatternThree(), PatternEight(), PatternEleven(), PatternTwentyFour(), PatternTwentySeven(), //luo
+		PatternOne(), PatternTwo(), PatternThree(), PatternFour(), PatternFive(), 
+		PatternSix(), PatternSeven(), //PatternEight(), PatternNine(), 
+		PatternTen(),
+		PatternEleven(), PatternTwelve(), PatternThirteen(), PatternFourteen(), PatternFifteen(),
 		Identity());
 	if (m_optimisedItems.size() < m_items.size() || (
 		m_optimisedItems.size() == m_items.size() && (
